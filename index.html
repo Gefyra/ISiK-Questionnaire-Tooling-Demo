@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LHC-Forms Demo – FHIR Questionnaire Renderer</title>
-  <script type="module" crossorigin src="/ISiK-Questionnaire-Tooling-Demo/assets/main-MeDDNkjQ.js"></script>
-  <link rel="modulepreload" crossorigin href="/ISiK-Questionnaire-Tooling-Demo/assets/main-B3XIVLwK.js">
-  <link rel="stylesheet" crossorigin href="/ISiK-Questionnaire-Tooling-Demo/assets/main-CeEZ86Jc.css">
+  <script type="module" crossorigin src="/ISiK-Questionnaire-Tooling-Demo/assets/main-Dxy0U4F2.js"></script>
+  <link rel="modulepreload" crossorigin href="/ISiK-Questionnaire-Tooling-Demo/assets/resolve-BdVot1MW.js">
+  <link rel="stylesheet" crossorigin href="/ISiK-Questionnaire-Tooling-Demo/assets/resolve-L5Le9L-N.css">
   <link rel="stylesheet" crossorigin href="/ISiK-Questionnaire-Tooling-Demo/assets/main-BH4U6DQn.css">
 </head>
 <body>
@@ -108,6 +108,21 @@
       </div>
     </section>
   </main>
+
+  <!-- Modal für Browse-Suchergebnisse -->
+  <div id="browseModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="browseTitle">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="browseTitle">Suche</h3>
+        <button id="browseClose" class="btn ghost" title="Schließen">Schließen</button>
+      </div>
+      <div class="modal-body">
+        <div id="browseInfo" class="hint"></div>
+        <div id="browseStatus" class="hint"></div>
+        <div id="browseResults" class="results-grid"></div>
+      </div>
+    </div>
+  </div>
 
   <footer>
     Copyright 2025@Team PT-DATA<br>

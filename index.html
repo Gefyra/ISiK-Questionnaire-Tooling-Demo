@@ -16,6 +16,17 @@
     <section class="panel" id="leftPanel">
       <h2>Quelle wählen</h2>
       <div class="body stack">
+        <div class="stack collapsible" data-title="SMART on FHIR">
+          <label for="smartIss">SMART/FHIR Base (iss)</label>
+          <input id="smartIss" type="text" placeholder="z. B. https://ehr.example/fhir" />
+          <label for="smartScopes">Scopes</label>
+          <input id="smartScopes" type="text" placeholder="launch/patient openid profile fhirUser patient/*.read offline_access" />
+          <div class="row row2">
+            <button id="btnSmartLogin" class="btn">Mit SMART verbinden</button>
+            <button id="btnSmartLogout" class="btn secondary" disabled>Abmelden</button>
+          </div>
+          <div id="smartStatus" class="hint"></div>
+        </div>
         <div class="stack collapsible collapsed" data-title="Questionnaire per URL">
           <label for="fhirUrl">Questionnaire per URL (FHIR JSON)</label>
           <div class="row">

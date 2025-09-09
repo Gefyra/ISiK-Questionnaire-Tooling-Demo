@@ -8,6 +8,10 @@ import 'lforms/dist/lforms/fhir/R4/lformsFHIR.min.js';
 import { UcumLhcUtils } from '@lhncbc/ucum-lhc';
 window.UcumLhcUtils = UcumLhcUtils;
 
+// SMART on FHIR Helper
+import { SMART_CONFIG } from './smart-config.js';
+import { ensureReady as smartEnsureReady, authorize as smartAuthorize, makeLFormsClient as makeSmartLFormsClient, getContext as getSmartContext, getSmartBase, scheduleRefresh, signOut as smartSignOut } from './smart.js';
+
 
 function getParam(...names) {
   const sp = new URLSearchParams(window.location.search);
@@ -50,6 +54,44 @@ function renderQuestionnaire(q) {
 const el = (id) => document.getElementById(id);
 const status = (msg, cls) => { const s = el('status'); s.className = cls||''; s.textContent = msg||''; };
 
+// --- SMART on FHIR state -------------------------------------------------
+let _smartClient = null;
+let _smartRefreshTimer = null;
+
+function setSmartStatus(text, cls = '') {
+  const s = el('smartStatus'); if (s) { s.textContent = text || ''; s.className = 'hint ' + (cls||''); }
+}
+function setSmartUiConnected(connected) {
+  const btnIn = el('btnSmartLogin'); const btnOut = el('btnSmartLogout');
+  if (btnIn) btnIn.disabled = !!connected;
+  if (btnOut) btnOut.disabled = !connected;
+}
+
+async function onSmartReady(client) {
+  _smartClient = client;
+  setSmartUiConnected(true);
+  try {
+    const base = getSmartBase(client) || '(unbekannt)';
+    const ctx = await getSmartContext(client);
+    const info = [ `Verbunden mit: ${base}` ];
+    if (ctx.fhirUser) info.push(`User: ${ctx.fhirUser}`);
+    if (ctx.patientId) info.push(`Patient: ${ctx.patientId}`);
+    if (ctx.encounterId) info.push(`Encounter: ${ctx.encounterId}`);
+    setSmartStatus(info.join(' | '), '');
+    // UI spiegeln
+    if (ctx.patientId && el('patientId')) setAndPersist('patientId', ctx.patientId);
+    if (ctx.encounterId && el('encounterId')) setAndPersist('encounterId', ctx.encounterId);
+    // FHIR-Kontext in LForms setzen (autorisiert)
+    const lfClient = makeSmartLFormsClient(client, { patient: ctx.patientId, encounter: ctx.encounterId, user: null });
+    window.LForms?.Util?.setFHIRContext?.(lfClient, {});
+    // Refresh-Timer
+    if (_smartRefreshTimer) clearTimeout(_smartRefreshTimer);
+    _smartRefreshTimer = scheduleRefresh(client, () => setSmartStatus('Token aktualisiert.', 'ok'));
+  } catch (e) {
+    console.warn('SMART init error:', e);
+  }
+}
+
 // --- UI Helpers -----------------------------------------------------------
 function getUiValues() {
   const fhirUrl = el('fhirUrl')?.value?.trim() || '';
@@ -70,6 +112,17 @@ function getEffectivePrepopBase(vals) {
 
 async function configureFromUI() {
   const vals = getUiValues();
+  if (_smartClient) {
+    try {
+      const ctx = await getSmartContext(_smartClient);
+      const lfClient = makeSmartLFormsClient(_smartClient, { patient: ctx.patientId, encounter: ctx.encounterId, user: null });
+      window.LForms?.Util?.setFHIRContext?.(lfClient, {});
+      _configuredFHIRBase = getSmartBase(_smartClient);
+      return { ok: true, results: { patient: ctx.patientId? 'ok':'skipped', encounter: ctx.encounterId? 'ok':'skipped', user: 'skipped' }, messages: {} };
+    } catch (e) {
+      return { ok: false, messages: { smart: e.message || 'SMART-Konfiguration fehlgeschlagen' }, results: {} };
+    }
+  }
   const effBase = getEffectivePrepopBase(vals);
   if (!effBase) return { ok: false, messages: { base: 'Keine FHIR Base angegeben' }, results: {} };
   return await configureLFormsFHIRContext(effBase, vals.ids);
@@ -375,8 +428,13 @@ async function loadQuestionnaireFromUrl(url) {
 }
 
 async function loadQuestionnaireFromServer(base, id) {
+  const smartBase = _smartClient ? (getSmartBase(_smartClient) || '') : '';
+  const norm = (s) => (s||'').replace(/\/?$/,'');
+  if (_smartClient && (!base || norm(base) === norm(smartBase))) {
+    return await _smartClient.request(`Questionnaire/${encodeURIComponent(id)}?_format=json`, { flat: true });
+  }
   const sep = base.endsWith('/') ? '' : '/';
-  const url = base + sep + 'Questionnaire/' + encodeURIComponent(id);
+  const url = base + sep + 'Questionnaire/' + encodeURIComponent(id) + '?_format=json';
   return await loadQuestionnaireFromUrl(url);
 }
 
@@ -406,6 +464,26 @@ if (btnCopy) {
       status('Kopieren fehlgeschlagen.', 'err');
     }
   };
+}
+
+// SMART UI Handlers
+const btnSmartLogin = el('btnSmartLogin');
+if (btnSmartLogin) {
+  // Default Scopes vorbesetzen
+  const sc = el('smartScopes'); if (sc && !sc.value) sc.value = SMART_CONFIG.defaultScopes;
+  btnSmartLogin.onclick = async () => {
+    try {
+      const iss = el('smartIss')?.value?.trim();
+      const scopes = el('smartScopes')?.value?.trim() || SMART_CONFIG.defaultScopes;
+      if (!iss) return setSmartStatus('Bitte SMART/FHIR Base (iss) angeben.', 'err');
+      setSmartStatus('Leite zur Autorisierung weiter …');
+      await smartAuthorize({ iss, launch: null, clientId: SMART_CONFIG.clientId, redirectUri: SMART_CONFIG.redirectUri, scope: scopes });
+    } catch (e) { setSmartStatus(e.message || 'SMART Autorisierung fehlgeschlagen', 'err'); }
+  };
+}
+const btnSmartLogout = el('btnSmartLogout');
+if (btnSmartLogout) {
+  btnSmartLogout.onclick = () => { smartSignOut(); };
 }
 
 el('btnLoadServer').onclick = async () => {
@@ -610,6 +688,27 @@ el('btnClear').onclick = () => {
   status('Zurückgesetzt.');
 };
 
+// ---- SMART Init (Callback/Launch) --------------------------------------
+(async function initSmart() {
+  try {
+    const ready = await smartEnsureReady();
+    if (ready) {
+      await onSmartReady(ready);
+      return;
+    }
+    const sp = new URLSearchParams(window.location.search);
+    const iss = sp.get('iss');
+    const launch = sp.get('launch');
+    if (iss) {
+      const scopes = el('smartScopes')?.value?.trim() || SMART_CONFIG.defaultScopes;
+      setSmartStatus('Starte SMART Autorisierung …');
+      await smartAuthorize({ iss, launch, clientId: SMART_CONFIG.clientId, redirectUri: SMART_CONFIG.redirectUri, scope: scopes });
+    }
+  } catch (e) {
+    console.warn('SMART init failed:', e);
+  }
+})();
+
 // ---- Auto-Init from URL ----
 (async function initFromQuery() {
   try {
@@ -628,9 +727,11 @@ el('btnClear').onclick = () => {
     // Wenn explizite URL vorhanden, diese nutzen
     if (qUrl) {
       if (document.body.classList.contains('minimal')) hideLeftPanelAndExpandMain();
-      // FHIR-Kontext setzen: bevorzugt prepopBase (URL/UI), sonst base (URL/UI)
-      const effBase = prepopBase || base || el('prepopBase')?.value?.trim() || el('fhirBase')?.value?.trim();
-      if (effBase) await configureLFormsFHIRContext(effBase, { patient: patientId, encounter: encounterId, user: userId });
+      // Falls SMART nicht aktiv ist: FHIR-Kontext setzen
+      if (!_smartClient) {
+        const effBase = prepopBase || base || el('prepopBase')?.value?.trim() || el('fhirBase')?.value?.trim();
+        if (effBase) await configureLFormsFHIRContext(effBase, { patient: patientId, encounter: encounterId, user: userId });
+      }
       const q = await loadQuestionnaireFromUrl(qUrl);
       // UI spiegeln & persistieren
       if (el('fhirUrl')) setAndPersist('fhirUrl', qUrl);
@@ -644,7 +745,9 @@ el('btnClear').onclick = () => {
     // Alternativ base+id
     if (base && id) {
       if (document.body.classList.contains('minimal')) hideLeftPanelAndExpandMain();
-      await configureLFormsFHIRContext(prepopBase || base, { patient: patientId, encounter: encounterId, user: userId });
+      if (!_smartClient) {
+        await configureLFormsFHIRContext(prepopBase || base, { patient: patientId, encounter: encounterId, user: userId });
+      }
       const q = await loadQuestionnaireFromServer(base, id);
       if (el('fhirBase')) setAndPersist('fhirBase', base);
       if (el('qId')) setAndPersist('qId', id);
@@ -657,7 +760,7 @@ el('btnClear').onclick = () => {
     // Kein Auto-Render → aber ggf. FHIR-Kontext aus Query setzen
     const anyCtxIds = !!(patientId || encounterId || userId);
     const effBaseNoQ = prepopBase || base || el('prepopBase')?.value?.trim() || el('fhirBase')?.value?.trim();
-    if (effBaseNoQ && anyCtxIds) {
+    if (!_smartClient && effBaseNoQ && anyCtxIds) {
       // UI spiegeln & persistieren
       if (el('prepopBase') && prepopBase) setAndPersist('prepopBase', prepopBase);
       if (el('fhirBase') && base) setAndPersist('fhirBase', base);
